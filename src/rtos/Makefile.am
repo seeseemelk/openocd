@@ -7,6 +7,7 @@ noinst_LTLIBRARIES += %D%/librtos.la
 	%D%/rtos_embkernel_stackings.c \
 	%D%/rtos_mqx_stackings.c \
 	%D%/rtos_ucos_iii_stackings.c \
+	%D%/rtos_riot_stackings.c \
 	%D%/FreeRTOS.c \
 	%D%/ThreadX.c \
 	%D%/eCos.c \
@@ -17,6 +18,8 @@ noinst_LTLIBRARIES += %D%/librtos.la
 	%D%/mqx.c \
 	%D%/uCOS-III.c \
 	%D%/nuttx.c \
+	%D%/rtos_riot_stackings.c \
+	%D%/riot.c \
 	%D%/hwthread.c \
 	%D%/rtos.h \
 	%D%/rtos_standard_stackings.h \
@@ -26,6 +29,7 @@ noinst_LTLIBRARIES += %D%/librtos.la
 	%D%/rtos_embkernel_stackings.h \
 	%D%/rtos_mqx_stackings.h \
 	%D%/rtos_ucos_iii_stackings.h \
+	%D%/rtos_riot_stackings.c \
 	%D%/nuttx_header.h
 
 %C%_librtos_la_CFLAGS = $(AM_CFLAGS)
