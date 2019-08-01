@@ -158,51 +158,57 @@ static int riot_create(struct target *target)
 	return 0;
 }
 
-static char *alloc_info_str(thread_state_t status)
+static const char *describe_thread_status(thread_state_t status)
 {
-	char *buf = malloc(64);
 	switch (status)
 	{
 	case STATUS_STOPPED:
-		strcpy(buf, "Stopped");
-		break;
+		return "stopped";
 	case STATUS_SLEEPING:
-		strcpy(buf, "Sleeping");
-		break;
+		return "sleeping";
 	case STATUS_MUTEX_BLOCKED:
-		strcpy(buf, "Blocked on mutex");
+		return "blocked on mutex";
 		break;
 	case STATUS_RECEIVE_BLOCKED:
-		strcpy(buf, "Waiting for message");
+		return "waiting for message";
 		break;
 	case STATUS_SEND_BLOCKED:
-		strcpy(buf, "Sending message");
+		return "sending message";
 		break;
 	case STATUS_REPLY_BLOCKED:
-		strcpy(buf, "Replying to message");
+		return "replying to message";
 		break;
 	case STATUS_FLAG_BLOCKED_ANY:
-		strcpy(buf, "Waiting for any flag from flag_mask");
+		return "waiting for any flag from flag_mask";
 		break;
 	case STATUS_FLAG_BLOCKED_ALL:
-		strcpy(buf, "Waiting for all flags in flag_mask");
+		return "waiting for all flags in flag_mask";
 		break;
 	case STATUS_MBOX_BLOCKED:
-		strcpy(buf, "Blocked on get/put on mbox");
+		return "blocked on get/put on mbox";
 		break;
 	case STATUS_COND_BLOCKED:
-		strcpy(buf, "Blocked on condition variable");
+		return "blocked on condition variable";
 		break;
 	case STATUS_RUNNING:
-		strcpy(buf, "Running");
+		return "running";
 		break;
 	case STATUS_PENDING:
-		strcpy(buf, "Pending");
+		return "pending";
 		break;
 	default:
-		snprintf(buf, 64, "Invalid status: %d", status);
-		break;
+		return "INVALID STATUS";
 	}
+}
+
+static char *alloc_info_str(struct _thread *thread)
+{
+	char *buf = malloc(64);
+	snprintf(buf, 64, "%s, priority: %u",
+			describe_thread_status(thread->status),
+			thread->priority
+
+	);
 	return buf;
 }
 
@@ -279,7 +285,7 @@ static int riot_update_threads(struct rtos *rtos)
 			strcpy(name_buf, "Unnamed Thread");
 		}
 		thread->thread_name_str = name_buf;
-		thread->extra_info_str = alloc_info_str(thread_info.status);
+		thread->extra_info_str = alloc_info_str(&thread_info);
 
 		if (thread_info.status == STATUS_RUNNING) {
 			rtos->current_thread = thread->threadid;
