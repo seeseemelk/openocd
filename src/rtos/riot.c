@@ -18,18 +18,20 @@
 #include "config.h"
 #endif
 
-#include <target/target.h>
-
+#include "target/target.h"
+#include "target/register.h"
 #include "stdio.h"
 #include "rtos.h"
 #include "log.h"
 #include "rtos_riot_stackings.h"
 #include "rtos_standard_stackings.h"
+#include "binarybuffer.h"
 
 struct riot_params {
 	const struct rtos_register_stacking *stacking;
 	uint32_t thread_count;
 	uint32_t *thread_ptrs;
+	bool inside_irq;
 };
 
 static const char * const riot_symbol_list[] = {
@@ -220,14 +222,24 @@ static int riot_update_threads(struct rtos *rtos)
 			(uint32_t *)&thread_count);
 	if (ret != ERROR_OK) {
 		LOG_ERROR("Failed to get thread count");
-		return ret;
+		return ERROR_FAIL;
 	}
 
+	// Check if we are in an interrupt
+	struct reg *reg = register_get_by_name(rtos->target->reg_cache, "control", true);
+	if (reg == NULL) {
+		LOG_ERROR("Could not find register 'control'");
+		return ret;
+	}
+	uint32_t control_reg = buf_get_u32(reg->value, 0, 32);
+	params->inside_irq = (control_reg & 2) == 0;
+
+	// Do some housekeeping
 	rtos_free_threadlist(rtos);
-	rtos->thread_count = thread_count;
+	rtos->thread_count = thread_count + (params->inside_irq?1:0);
 	rtos->thread_details = malloc(sizeof(struct thread_detail) * thread_count);
 
-	// Read the list of thread pointers.
+	// Read the list of thread pointers
 	params->thread_ptrs = realloc(params->thread_ptrs, sizeof(uint32_t) * thread_count);
 	ret = target_read_buffer(rtos->target,
 			rtos->symbols[RIOT_VAL_sched_threads].address,
@@ -238,7 +250,7 @@ static int riot_update_threads(struct rtos *rtos)
 		return ret;
 	}
 
-	for (int i = 0; i < rtos->thread_count; i++) {
+	for (int i = 0; i < thread_count; i++) {
 		struct thread_detail *thread;
 		struct _thread thread_info;
 
@@ -275,6 +287,23 @@ static int riot_update_threads(struct rtos *rtos)
 		}
 	}
 
+	if (params->inside_irq) {
+		struct thread_detail *thread = rtos->thread_details + thread_count;
+
+		char *info_buf = malloc(sizeof("IRQ"));
+		strcpy(info_buf, "IRQ");
+		thread->extra_info_str = info_buf;
+		thread->exists = true;
+		thread->threadid = -1;
+
+		char *name_buf = malloc(64);
+		snprintf(name_buf, 64, "IRQ running on '%s'", rtos->thread_details[rtos->current_threadid].thread_name_str);
+		thread->thread_name_str = name_buf;
+
+		rtos->current_thread = thread->threadid;
+		rtos->current_threadid = thread_count;
+	}
+
 	return ERROR_OK;
 }
 
@@ -287,58 +316,67 @@ static int riot_get_thread_reg_list(struct rtos *rtos,
 	int ret;
 
 	if (rtos->symbols == NULL) {
-		LOG_ERROR("No symbols for RIOT");
 		return -3;
 	}
 
-	// Read thread count.
-	int32_t thread_count;
-	ret = target_read_u32(rtos->target,
-			rtos->symbols[RIOT_VAL_sched_num_threads].address,
-			(uint32_t *)&thread_count);
-	if (ret != ERROR_OK) {
-		LOG_ERROR("Failed to get thread count");
-		return ret;
-	}
+	if (threadid == -1) {
+		// Fake IRQ thread.
+		struct reg *reg = register_get_by_name(rtos->target->reg_cache, "sp", true);
+		if (reg == NULL) {
+			LOG_ERROR("Could not find register 'sp'");
+			return ERROR_FAIL;
+		}
+		uint32_t sp = buf_get_u32(reg->value, 0, 32);
+		return rtos_generic_stack_read(
+				rtos->target,
+				params->stacking,
+				sp,
+				reg_list,
+				num_regs
+		);
+	} else {
+		// Find the correct thread.
+		for (int i = 0; i < rtos->thread_count; i++) {
+			struct _thread thread_info;
 
-	// Read the list of thread pointers.
-	uint32_t thread_ptrs[thread_count];
-	ret = target_read_buffer(rtos->target,
-			rtos->symbols[RIOT_VAL_sched_threads].address,
-			4 * (thread_count + 1),
-			(uint8_t *)thread_ptrs);
-	if (ret != ERROR_OK) {
-		LOG_ERROR("Failed to read thread details");
-		return ret;
-	}
+			ret = target_read_buffer(rtos->target,
+					params->thread_ptrs[i + 1],
+					sizeof(struct _thread),
+					(uint8_t *)&thread_info);
+			if (ret != ERROR_OK) {
+				LOG_ERROR("Failed to read thread buffer");
+				continue;
+			}
 
-	// Find the correct thread.
-	for (int i = 0; i < rtos->thread_count; i++) {
-		struct _thread thread_info;
+			if (thread_info.pid == threadid) {
+				uint32_t sp = thread_info.sp;
 
-		ret = target_read_buffer(rtos->target,
-				thread_ptrs[i + 1],
-				sizeof(struct _thread),
-				(uint8_t *)&thread_info);
-		if (ret != ERROR_OK) {
-			LOG_ERROR("Failed to read thread buffer");
-			continue;
+				if (params->inside_irq && thread_info.status == STATUS_RUNNING) {
+					struct reg *reg = register_get_by_name(rtos->target->reg_cache, "psp", true);
+					if (reg == NULL) {
+						LOG_ERROR("Could not find register 'psp'");
+						return ERROR_FAIL;
+					}
+					uint32_t psp = buf_get_u32(reg->value, 0, 32);
+					if (psp != 0) {
+						sp = psp - 0x24;
+					}
+				}
+
+				// Read thread info.
+				return rtos_generic_stack_read(
+						rtos->target,
+						params->stacking,
+						sp,
+						reg_list,
+						num_regs
+				);
+			}
 		}
 
-		if (thread_info.pid == threadid) {
-			// Read thread info.
-			return rtos_generic_stack_read(
-					rtos->target,
-					params->stacking,
-					thread_info.sp,
-					reg_list,
-					num_regs
-			);
-		}
+		LOG_ERROR("Thread not found");
+		return ERROR_FAIL;
 	}
-
-	LOG_ERROR("Thread not found");
-	return ERROR_FAIL;
 }
 
 static int riot_get_symbol_list_to_lookup(symbol_table_elem_t *symbol_list[])
