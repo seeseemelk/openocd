@@ -158,6 +158,20 @@ static int riot_create(struct target *target)
 	return 0;
 }
 
+static int riot_clean(struct target *target)
+{
+	struct riot_params *params = target->rtos->rtos_specific_params;
+
+	free(params->thread_infos);
+	params->thread_infos = NULL;
+
+	free(params->thread_ptrs);
+	params->thread_ptrs = NULL;
+
+	rtos_free_threadlist(target->rtos);
+	return 0;
+}
+
 static const char *describe_thread_status(thread_state_t status)
 {
 	switch (status)
@@ -343,7 +357,7 @@ static int riot_get_thread_reg_list(struct rtos *rtos,
 		);
 	} else {
 		// Find the correct thread.
-		for (int i = 0; i < rtos->thread_count; i++) {
+		for (int i = 0; i < rtos->thread_count - 1; i++) {
 			struct _thread *thread_info = params->thread_infos + i;
 
 			if (thread_info->pid == threadid) {
@@ -398,6 +412,7 @@ struct rtos_type riot_rtos = {
 	.name = "riot",
 	.detect_rtos = riot_detect_rtos,
 	.create = riot_create,
+	.clean = riot_clean,
 	.update_threads = riot_update_threads,
 	.get_thread_reg_list = riot_get_thread_reg_list,
 	.get_symbol_list_to_lookup = riot_get_symbol_list_to_lookup
