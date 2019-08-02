@@ -387,8 +387,7 @@ static int riot_update_threads(struct rtos *rtos)
 			name_buf[63] = 0;
 			thread->thread_name_str = name_buf;
 		} else {
-			thread->thread_name_str = malloc(sizeof("Unnamed Thread"));
-			strcpy(thread->thread_name_str, "Unnamed Thread");
+			thread->thread_name_str = NULL;
 		}
 
 		thread->extra_info_str = alloc_info_str(thread_info);
