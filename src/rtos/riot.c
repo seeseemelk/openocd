@@ -77,6 +77,14 @@ typedef struct list_node {
 	uint32_t next;     /**< pointer to next list entry */
 } list_node_t;
 
+struct thread_info {
+	uint32_t sp;
+	uint8_t status;
+	uint8_t priority;
+	int16_t pid;
+	uint32_t name;
+};
+
 // see RIOT/core/include/thread.h
 struct _thread_with_develhelp {
     uint32_t sp;                       /**< thread's stack pointer         */
@@ -150,7 +158,7 @@ struct riot_params {
 	const struct rtos_register_stacking *stacking;
 	uint32_t thread_count;
 	uint32_t *thread_ptrs;
-	void *thread_infos;
+	struct thread_info *thread_infos;
 	bool inside_irq;
 	bool develhelp;
 };
@@ -249,7 +257,7 @@ static const char *describe_thread_status(thread_state_t status)
 	}
 }
 
-static char *alloc_info_str_develhelp(struct _thread_with_develhelp *thread)
+static char *alloc_info_str(struct thread_info *thread)
 {
 	char *buf = malloc(64);
 	snprintf(buf, 64, "%s, priority: %u",
@@ -260,15 +268,43 @@ static char *alloc_info_str_develhelp(struct _thread_with_develhelp *thread)
 	return buf;
 }
 
-static char *alloc_info_str(struct _thread_without_develhelp *thread)
+static int read_thread_info(struct riot_params *params, struct rtos *rtos, struct thread_info *thread_info, int thread_id)
 {
-	char *buf = malloc(64);
-	snprintf(buf, 64, "%s, priority: %u",
-			describe_thread_status(thread->status),
-			thread->priority
-	);
-	buf[63] = 0;
-	return buf;
+	if (params->develhelp) {
+		struct _thread_with_develhelp buf;
+		int ret = target_read_buffer(rtos->target,
+				params->thread_ptrs[thread_id],
+				sizeof(struct _thread_with_develhelp),
+				(uint8_t *)&buf);
+		if (ret != ERROR_OK) {
+			LOG_ERROR("Failed to read thread information");
+			return ret;
+		}
+
+		thread_info->pid = buf.pid;
+		thread_info->priority = buf.priority;
+		thread_info->sp = buf.sp;
+		thread_info->status = buf.status;
+		thread_info->name = buf.name;
+	} else {
+		struct _thread_without_develhelp buf;
+		int ret = target_read_buffer(rtos->target,
+				params->thread_ptrs[thread_id],
+				sizeof(struct _thread_with_develhelp),
+				(uint8_t *)&buf);
+		if (ret != ERROR_OK) {
+			LOG_ERROR("Failed to read thread information");
+			return ret;
+		}
+
+		thread_info->pid = buf.pid;
+		thread_info->priority = buf.priority;
+		thread_info->sp = buf.sp;
+		thread_info->status = buf.status;
+		thread_info->name = 0;
+	}
+
+	return ERROR_OK;
 }
 
 static int riot_update_threads(struct rtos *rtos)
@@ -315,11 +351,7 @@ static int riot_update_threads(struct rtos *rtos)
 	// Read the list of thread pointers
 	params->thread_ptrs = realloc(params->thread_ptrs, sizeof(uint32_t) * thread_count);
 
-	if (params->develhelp) {
-		params->thread_infos = realloc(params->thread_infos, sizeof(struct _thread_with_develhelp) * thread_count);
-	} else {
-		params->thread_infos = realloc(params->thread_infos, sizeof(struct _thread_without_develhelp) * thread_count);
-	}
+	params->thread_infos = realloc(params->thread_infos, sizeof(struct thread_info) * thread_count);
 
 	ret = target_read_buffer(rtos->target,
 			rtos->symbols[RIOT_VAL_sched_threads].address + 4,
@@ -331,23 +363,18 @@ static int riot_update_threads(struct rtos *rtos)
 	}
 
 	for (int i = 0; i < thread_count; i++) {
-		if (params->develhelp) {
-			struct thread_detail *thread = rtos->thread_details + i;
-			struct _thread_with_develhelp *thread_info = params->thread_infos + i;
+		struct thread_detail *thread = rtos->thread_details + i;
+		struct thread_info *thread_info = params->thread_infos + i;
 
-			ret = target_read_buffer(rtos->target,
-					params->thread_ptrs[i],
-					sizeof(struct _thread_with_develhelp),
-					(uint8_t *)thread_info);
-			if (ret != ERROR_OK) {
-				LOG_ERROR("Failed to read thread buffer");
-				continue;
-			}
+		ret = read_thread_info(params, rtos, thread_info, i);
+		if (ret != ERROR_OK) {
+			continue;
+		}
 
+		thread->exists = true;
+		thread->threadid = thread_info->pid;
 
-			thread->exists = true;
-			thread->threadid = thread_info->pid;
-
+		if (thread_info->name != 0) {
 			char *name_buf = malloc(64);
 			ret = target_read_buffer(rtos->target,
 					(target_addr_t) thread_info->name,
@@ -359,39 +386,16 @@ static int riot_update_threads(struct rtos *rtos)
 			}
 			name_buf[63] = 0;
 			thread->thread_name_str = name_buf;
-
-			thread->extra_info_str = alloc_info_str_develhelp(thread_info);
-
-			if (thread_info->status == STATUS_RUNNING) {
-				rtos->current_thread = thread->threadid;
-				rtos->current_threadid = i;
-			}
 		} else {
-			struct thread_detail *thread = rtos->thread_details + i;
-			struct _thread_without_develhelp *thread_info = params->thread_infos + i;
-
-			ret = target_read_buffer(rtos->target,
-					params->thread_ptrs[i],
-					sizeof(struct _thread_without_develhelp),
-					(uint8_t *)thread_info);
-			if (ret != ERROR_OK) {
-				LOG_ERROR("Failed to read thread buffer");
-				continue;
-			}
-
-
-			thread->exists = true;
-			thread->threadid = thread_info->pid;
-
 			thread->thread_name_str = malloc(sizeof("Unnamed Thread"));
 			strcpy(thread->thread_name_str, "Unnamed Thread");
+		}
 
-			thread->extra_info_str = alloc_info_str(thread_info);
+		thread->extra_info_str = alloc_info_str(thread_info);
 
-			if (thread_info->status == STATUS_RUNNING) {
-				rtos->current_thread = thread->threadid;
-				rtos->current_threadid = i;
-			}
+		if (thread_info->status == STATUS_RUNNING) {
+			rtos->current_thread = thread->threadid;
+			rtos->current_threadid = i;
 		}
 	}
 
@@ -445,60 +449,31 @@ static int riot_get_thread_reg_list(struct rtos *rtos,
 	} else {
 		// Find the correct thread.
 		for (int i = 0; i < rtos->thread_count - 1; i++) {
-			if (params->develhelp) {
-				struct _thread_with_develhelp *thread_info = params->thread_infos + i;
+			struct thread_info *thread_info = params->thread_infos + i;
 
-				if (thread_info->pid == threadid) {
-					uint32_t sp = thread_info->sp;
+			if (thread_info->pid == threadid) {
+				uint32_t sp = thread_info->sp;
 
-					if (params->inside_irq && thread_info->status == STATUS_RUNNING) {
-						struct reg *reg = register_get_by_name(rtos->target->reg_cache, "psp", true);
-						if (reg == NULL) {
-							LOG_ERROR("Could not find register 'psp'");
-							return ERROR_FAIL;
-						}
-						uint32_t psp = buf_get_u32(reg->value, 0, 32);
-						if (psp != 0) {
-							sp = psp - 0x24;
-						}
+				if (params->inside_irq && thread_info->status == STATUS_RUNNING) {
+					struct reg *reg = register_get_by_name(rtos->target->reg_cache, "psp", true);
+					if (reg == NULL) {
+						LOG_ERROR("Could not find register 'psp'");
+						return ERROR_FAIL;
 					}
-
-					// Read thread info.
-					return rtos_generic_stack_read(
-							rtos->target,
-							params->stacking,
-							sp,
-							reg_list,
-							num_regs
-					);
-				}
-			} else {
-				struct _thread_without_develhelp *thread_info = params->thread_infos + i;
-
-				if (thread_info->pid == threadid) {
-					uint32_t sp = thread_info->sp;
-
-					if (params->inside_irq && thread_info->status == STATUS_RUNNING) {
-						struct reg *reg = register_get_by_name(rtos->target->reg_cache, "psp", true);
-						if (reg == NULL) {
-							LOG_ERROR("Could not find register 'psp'");
-							return ERROR_FAIL;
-						}
-						uint32_t psp = buf_get_u32(reg->value, 0, 32);
-						if (psp != 0) {
-							sp = psp - 0x24;
-						}
+					uint32_t psp = buf_get_u32(reg->value, 0, 32);
+					if (psp != 0) {
+						sp = psp - 0x24;
 					}
-
-					// Read thread info.
-					return rtos_generic_stack_read(
-							rtos->target,
-							params->stacking,
-							sp,
-							reg_list,
-							num_regs
-					);
 				}
+
+				// Read thread info.
+				return rtos_generic_stack_read(
+						rtos->target,
+						params->stacking,
+						sp,
+						reg_list,
+						num_regs
+				);
 			}
 		}
 
