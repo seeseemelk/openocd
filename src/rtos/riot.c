@@ -161,6 +161,8 @@ struct riot_params {
 	struct thread_info *thread_infos;
 	bool inside_irq;
 	bool develhelp;
+	uint32_t register_sp;
+	uint32_t register_psp;
 };
 
 static bool riot_detect_rtos(struct target *target)
@@ -335,6 +337,11 @@ static int riot_update_threads(struct rtos *rtos)
 
 
 	// Check if we are in an interrupt
+	if (!target_was_examined(rtos->target)) {
+		LOG_ERROR("Target was not yet examined");
+		return ERROR_FAIL;
+	}
+
 	struct reg *reg = register_get_by_name(rtos->target->reg_cache, "control", true);
 	if (reg == NULL) {
 		LOG_ERROR("Could not find register 'control'");
@@ -346,7 +353,7 @@ static int riot_update_threads(struct rtos *rtos)
 	// Do some housekeeping
 	rtos_free_threadlist(rtos);
 	rtos->thread_count = thread_count + (params->inside_irq?1:0);
-	rtos->thread_details = malloc(sizeof(struct thread_detail) * thread_count);
+	rtos->thread_details = malloc(sizeof(struct thread_detail) * rtos->thread_count);
 
 	// Read the list of thread pointers
 	params->thread_ptrs = realloc(params->thread_ptrs, sizeof(uint32_t) * thread_count);
@@ -399,7 +406,7 @@ static int riot_update_threads(struct rtos *rtos)
 	}
 
 	if (params->inside_irq) {
-		struct thread_detail *irq_thread = rtos->thread_details + thread_count;
+		struct thread_detail *irq_thread = rtos->thread_details + rtos->thread_count - 1;
 
 		char *info_buf = malloc(sizeof("IRQ"));
 		strcpy(info_buf, "IRQ");
@@ -414,6 +421,21 @@ static int riot_update_threads(struct rtos *rtos)
 
 		rtos->current_thread = irq_thread->threadid;
 		rtos->current_threadid = thread_count;
+
+		// Let's update the registers here so that we don't have to do it in riot_get_thread_reg_list.
+		reg = register_get_by_name(rtos->target->reg_cache, "sp", true);
+		if (reg == NULL) {
+			LOG_ERROR("Could not find register 'sp'");
+			return ERROR_FAIL;
+		}
+		params->register_sp = buf_get_u32(reg->value, 0, 32);
+
+		reg = register_get_by_name(rtos->target->reg_cache, "psp", true);
+		if (reg == NULL) {
+			LOG_ERROR("Could not find register 'psp'");
+			return ERROR_FAIL;
+		}
+		params->register_psp = buf_get_u32(reg->value, 0, 32);
 	}
 
 	return ERROR_OK;
@@ -432,37 +454,23 @@ static int riot_get_thread_reg_list(struct rtos *rtos,
 
 	if (threadid == IRQ_THREAD_ID) {
 		// Fake IRQ thread.
-		struct reg *reg = register_get_by_name(rtos->target->reg_cache, "sp", true);
-		if (reg == NULL) {
-			LOG_ERROR("Could not find register 'sp'");
-			return ERROR_FAIL;
-		}
-		uint32_t sp = buf_get_u32(reg->value, 0, 32);
 		return rtos_generic_stack_read(
 				rtos->target,
 				params->stacking,
-				sp,
+				params->register_sp,
 				reg_list,
 				num_regs
 		);
 	} else {
 		// Find the correct thread.
-		for (int i = 0; i < rtos->thread_count - 1; i++) {
+		for (int i = 0; i < rtos->thread_count - (params->inside_irq?1:0); i++) {
 			struct thread_info *thread_info = params->thread_infos + i;
 
 			if (thread_info->pid == threadid) {
 				uint32_t sp = thread_info->sp;
 
 				if (params->inside_irq && thread_info->status == STATUS_RUNNING) {
-					struct reg *reg = register_get_by_name(rtos->target->reg_cache, "psp", true);
-					if (reg == NULL) {
-						LOG_ERROR("Could not find register 'psp'");
-						return ERROR_FAIL;
-					}
-					uint32_t psp = buf_get_u32(reg->value, 0, 32);
-					if (psp != 0) {
-						sp = psp - 0x24;
-					}
+					sp = params->register_psp - 0x24;
 				}
 
 				// Read thread info.
