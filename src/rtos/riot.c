@@ -335,7 +335,6 @@ static int riot_update_threads(struct rtos *rtos)
 		return ERROR_FAIL;
 	}
 
-
 	// Check if we are in an interrupt
 	if (!target_was_examined(rtos->target)) {
 		LOG_ERROR("Target was not yet examined");
@@ -352,6 +351,10 @@ static int riot_update_threads(struct rtos *rtos)
 
 	// Do some housekeeping
 	rtos_free_threadlist(rtos);
+	if (thread_count == 0) {
+		LOG_ERROR("RIOT has a thread count of zero, threads might not yet be initialized");
+		return ERROR_FAIL;
+	}
 	rtos->thread_count = thread_count + (params->inside_irq?1:0);
 	rtos->thread_details = malloc(sizeof(struct thread_detail) * rtos->thread_count);
 
