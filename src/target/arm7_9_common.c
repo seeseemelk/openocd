@@ -2682,6 +2682,15 @@ int arm7_9_examine(struct target *target)
 	return retval;
 }
 
+void arm7_9_deinit(struct target *target)
+{
+	struct arm7_9_common *arm7_9 = target_to_arm7_9(target);
+
+	if (target_was_examined(target))
+		embeddedice_free_reg_cache(arm7_9->eice_cache);
+
+	arm_jtag_close_connection(&arm7_9->jtag_info);
+}
 
 int arm7_9_check_reset(struct target *target)
 {
@@ -2848,7 +2857,7 @@ int arm7_9_init_arch_info(struct target *target, struct arm7_9_common *arm7_9)
 	arm7_9->dcc_downloads = false;
 
 	arm->arch_info = arm7_9;
-	arm->core_type = ARM_MODE_ANY;
+	arm->core_type = ARM_CORE_TYPE_STD;
 	arm->read_core_reg = arm7_9_read_core_reg;
 	arm->write_core_reg = arm7_9_write_core_reg;
 	arm->full_context = arm7_9_full_context;

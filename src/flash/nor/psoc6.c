@@ -108,7 +108,7 @@ static const struct row_region safe_sflash_regions[] = {
 	{0x16007C00, 0x400},	/* SFLASH: TOC2 */
 };
 
-#define SFLASH_NUM_REGIONS (sizeof(safe_sflash_regions) / sizeof(safe_sflash_regions[0]))
+#define SFLASH_NUM_REGIONS ARRAY_SIZE(safe_sflash_regions)
 
 static struct working_area *g_stack_area;
 static struct armv7m_algorithm g_armv7m_info;
@@ -450,7 +450,7 @@ static int psoc6_protect_check(struct flash_bank *bank)
 			break;
 	}
 
-	for (int i = 0; i < bank->num_sectors; i++)
+	for (unsigned int i = 0; i < bank->num_sectors; i++)
 		bank->sectors[i].is_protected = is_protected;
 
 	return ERROR_OK;
@@ -460,7 +460,8 @@ static int psoc6_protect_check(struct flash_bank *bank)
  * @brief Dummy function, Life Cycle transition is not currently supported
  * @return ERROR_OK always
  *************************************************************************************************/
-static int psoc6_protect(struct flash_bank *bank, int set, int first, int last)
+static int psoc6_protect(struct flash_bank *bank, int set, unsigned int first,
+		unsigned int last)
 {
 	(void)bank;
 	(void)set;
@@ -481,20 +482,15 @@ static const char *protection_to_str(uint8_t protection)
 	switch (protection) {
 		case PROTECTION_VIRGIN:
 			return "VIRGIN";
-			break;
 		case PROTECTION_NORMAL:
 			return "NORMAL";
-			break;
 		case PROTECTION_SECURE:
 			return "SECURE";
-			break;
 		case PROTECTION_DEAD:
 			return "DEAD";
-			break;
 		case PROTECTION_UNKNOWN:
 		default:
 			return "UNKNOWN";
-			break;
 	}
 }
 
@@ -614,7 +610,7 @@ static int psoc6_probe(struct flash_bank *bank)
 		return ERROR_FLASH_BANK_INVALID;
 	}
 
-	size_t num_sectors = bank_size / row_sz;
+	unsigned int num_sectors = bank_size / row_sz;
 	bank->size = bank_size;
 	bank->chip_width = 4;
 	bank->bus_width = 4;
@@ -623,7 +619,7 @@ static int psoc6_probe(struct flash_bank *bank)
 
 	bank->num_sectors = num_sectors;
 	bank->sectors = calloc(num_sectors, sizeof(struct flash_sector));
-	for (size_t i = 0; i < num_sectors; i++) {
+	for (unsigned int i = 0; i < num_sectors; i++) {
 		bank->sectors[i].size = row_sz;
 		bank->sectors[i].offset = i * row_sz;
 		bank->sectors[i].is_erased = -1;
@@ -722,7 +718,8 @@ static int psoc6_erase_row(struct flash_bank *bank, struct working_area *wa, uin
  * @param last last sector to erase
  * @return ERROR_OK in case of success, ERROR_XXX code otherwise
  *************************************************************************************************/
-static int psoc6_erase(struct flash_bank *bank, int first, int last)
+static int psoc6_erase(struct flash_bank *bank, unsigned int first,
+		unsigned int last)
 {
 	struct target *target = bank->target;
 	struct psoc6_target_info *psoc6_info = bank->driver_priv;
@@ -745,7 +742,7 @@ static int psoc6_erase(struct flash_bank *bank, int first, int last)
 		goto exit;
 
 	/* Number of rows in single sector */
-	const int rows_in_sector = sector_size / psoc6_info->row_sz;
+	const unsigned int rows_in_sector = sector_size / psoc6_info->row_sz;
 
 	while (last >= first) {
 		/* Erase Sector if we are on sector boundary and erase size covers whole sector */
@@ -755,7 +752,7 @@ static int psoc6_erase(struct flash_bank *bank, int first, int last)
 			if (hr != ERROR_OK)
 				goto exit_free_wa;
 
-			for (int i = first; i < first + rows_in_sector; i++)
+			for (unsigned int i = first; i < first + rows_in_sector; i++)
 				bank->sectors[i].is_erased = 1;
 
 			first += rows_in_sector;

@@ -230,7 +230,7 @@ static int stm32x_otp_disable(struct flash_bank *bank)
 {
 	struct stm32x_flash_bank *stm32x_info = bank->driver_priv;
 
-	LOG_INFO("OTP memory bank #%d is disabled for write commands.",
+	LOG_INFO("OTP memory bank #%u is disabled for write commands.",
 		 bank->bank_number);
 	stm32x_info->otp_unlocked = false;
 	return ERROR_OK;
@@ -241,11 +241,11 @@ static int stm32x_otp_enable(struct flash_bank *bank)
 	struct stm32x_flash_bank *stm32x_info = bank->driver_priv;
 
 	if (!stm32x_info->otp_unlocked) {
-		LOG_INFO("OTP memory bank #%d is is enabled for write commands.",
+		LOG_INFO("OTP memory bank #%u is is enabled for write commands.",
 			 bank->bank_number);
 		stm32x_info->otp_unlocked = true;
 	} else {
-		LOG_WARNING("OTP memory bank #%d is is already enabled for write commands.",
+		LOG_WARNING("OTP memory bank #%u is is already enabled for write commands.",
 			    bank->bank_number);
 	}
 	return ERROR_OK;
@@ -522,13 +522,13 @@ static int stm32x_otp_read_protect(struct flash_bank *bank)
 {
 	struct target *target = bank->target;
 	uint32_t lock_base;
-	int i, retval;
+	int retval;
 	uint8_t lock;
 
 	lock_base = stm32x_otp_is_f7(bank) ? STM32F7_OTP_LOCK_BASE
 		  : STM32F2_OTP_LOCK_BASE;
 
-	for (i = 0; i < bank->num_sectors; i++) {
+	for (unsigned int i = 0; i < bank->num_sectors; i++) {
 		retval = target_read_u8(target, lock_base + i, &lock);
 		if (retval != ERROR_OK)
 			return retval;
@@ -538,14 +538,15 @@ static int stm32x_otp_read_protect(struct flash_bank *bank)
 	return ERROR_OK;
 }
 
-static int stm32x_otp_protect(struct flash_bank *bank, int first, int last)
+static int stm32x_otp_protect(struct flash_bank *bank, unsigned int first,
+		unsigned int last)
 {
 	struct target *target = bank->target;
 	uint32_t lock_base;
 	int i, retval;
 	uint8_t lock;
 
-	assert((0 <= first) && (first <= last) && (last < bank->num_sectors));
+	assert((first <= last) && (last < bank->num_sectors));
 
 	lock_base = stm32x_otp_is_f7(bank) ? STM32F7_OTP_LOCK_BASE
 		  : STM32F2_OTP_LOCK_BASE;
@@ -599,18 +600,18 @@ static int stm32x_protect_check(struct flash_bank *bank)
 	return ERROR_OK;
 }
 
-static int stm32x_erase(struct flash_bank *bank, int first, int last)
+static int stm32x_erase(struct flash_bank *bank, unsigned int first,
+		unsigned int last)
 {
 	struct stm32x_flash_bank *stm32x_info = bank->driver_priv;
 	struct target *target = bank->target;
-	int i;
 
 	if (stm32x_is_otp(bank)) {
 		LOG_ERROR("Cannot erase OTP memory");
 		return ERROR_FAIL;
 	}
 
-	assert((0 <= first) && (first <= last) && (last < bank->num_sectors));
+	assert((first <= last) && (last < bank->num_sectors));
 
 	if (bank->target->state != TARGET_HALTED) {
 		LOG_ERROR("Target not halted");
@@ -633,8 +634,8 @@ static int stm32x_erase(struct flash_bank *bank, int first, int last)
 	4. Wait for the BSY bit to be cleared
 	 */
 
-	for (i = first; i <= last; i++) {
-		int snb;
+	for (unsigned int i = first; i <= last; i++) {
+		unsigned int snb;
 		if (stm32x_info->has_large_mem && i >= 12)
 			snb = (i - 12) | 0x10;
 		else
@@ -659,7 +660,8 @@ static int stm32x_erase(struct flash_bank *bank, int first, int last)
 	return ERROR_OK;
 }
 
-static int stm32x_protect(struct flash_bank *bank, int set, int first, int last)
+static int stm32x_protect(struct flash_bank *bank, int set, unsigned int first,
+		unsigned int last)
 {
 	struct target *target = bank->target;
 	struct stm32x_flash_bank *stm32x_info = bank->driver_priv;
@@ -683,7 +685,7 @@ static int stm32x_protect(struct flash_bank *bank, int set, int first, int last)
 		return retval;
 	}
 
-	for (int i = first; i <= last; i++) {
+	for (unsigned int i = first; i <= last; i++) {
 		if (set)
 			stm32x_info->option_bytes.protection &= ~(1 << i);
 		else
@@ -894,31 +896,69 @@ static int stm32x_write(struct flash_bank *bank, const uint8_t *buffer,
 	return target_write_u32(target, STM32_FLASH_CR, FLASH_LOCK);
 }
 
-static int setup_sector(struct flash_bank *bank, int start, int num, int size)
+static void setup_sector(struct flash_bank *bank, unsigned int i,
+		unsigned int size)
 {
+	assert(i < bank->num_sectors);
+	bank->sectors[i].offset = bank->size;
+	bank->sectors[i].size = size;
+	bank->size += bank->sectors[i].size;
+	LOG_DEBUG("sector %d: %dkBytes", i, size >> 10);
+}
 
-	for (int i = start; i < (start + num) ; i++) {
-		assert(i < bank->num_sectors);
-		bank->sectors[i].offset = bank->size;
-		bank->sectors[i].size = size;
-		bank->size += bank->sectors[i].size;
-	    LOG_DEBUG("sector %d: %d kBytes", i, size >> 10);
+static uint16_t sector_size_in_kb(int i, uint16_t max_sector_size_in_kb)
+{
+	assert(i >= 0);
+	if (i < 4)
+		return max_sector_size_in_kb / 8;
+	if (i == 4)
+		return max_sector_size_in_kb / 2;
+	return max_sector_size_in_kb;
+}
+
+static int calculate_number_of_sectors(struct flash_bank *bank,
+		uint16_t flash_size_in_kb,
+		uint16_t max_sector_size_in_kb)
+{
+	struct stm32x_flash_bank *stm32x_info = bank->driver_priv;
+	uint16_t remaining_flash_size_in_kb = flash_size_in_kb;
+	int nr_sectors;
+
+	/* Dual Bank Flash has two identically-arranged banks of sectors. */
+	if (stm32x_info->has_large_mem)
+		remaining_flash_size_in_kb /= 2;
+
+	for (nr_sectors = 0; remaining_flash_size_in_kb > 0; nr_sectors++) {
+		uint16_t size_in_kb = sector_size_in_kb(nr_sectors, max_sector_size_in_kb);
+		if (size_in_kb > remaining_flash_size_in_kb) {
+			LOG_INFO("%s Bank %" PRIu16 " kiB final sector clipped to %" PRIu16 " kiB",
+				 stm32x_info->has_large_mem ? "Dual" : "Single",
+				 flash_size_in_kb, remaining_flash_size_in_kb);
+			remaining_flash_size_in_kb = 0;
+		} else {
+			remaining_flash_size_in_kb -= size_in_kb;
+		}
 	}
 
-	return start + num;
+	return stm32x_info->has_large_mem ? nr_sectors*2 : nr_sectors;
 }
 
 static void setup_bank(struct flash_bank *bank, int start,
 	uint16_t flash_size_in_kb, uint16_t max_sector_size_in_kb)
 {
-	int remain;
-
-	start = setup_sector(bank, start, 4, (max_sector_size_in_kb / 8) * 1024);
-	start = setup_sector(bank, start, 1, (max_sector_size_in_kb / 2) * 1024);
-
-	/* remaining sectors all of size max_sector_size_in_kb */
-	remain = (flash_size_in_kb / max_sector_size_in_kb) - 1;
-	start = setup_sector(bank, start, remain, max_sector_size_in_kb * 1024);
+	uint16_t remaining_flash_size_in_kb = flash_size_in_kb;
+	int sector_index = 0;
+	while (remaining_flash_size_in_kb > 0) {
+		uint16_t size_in_kb = sector_size_in_kb(sector_index, max_sector_size_in_kb);
+		if (size_in_kb > remaining_flash_size_in_kb) {
+			/* Clip last sector. Already warned in
+			 * calculate_number_of_sectors. */
+			size_in_kb = remaining_flash_size_in_kb;
+		}
+		setup_sector(bank, start + sector_index, size_in_kb * 1024);
+		remaining_flash_size_in_kb -= size_in_kb;
+		sector_index++;
+	}
 }
 
 static int stm32x_get_device_id(struct flash_bank *bank, uint32_t *device_id)
@@ -1150,12 +1190,12 @@ static int stm32x_probe(struct flash_bank *bank)
 	}
 
 	/* calculate numbers of pages */
-	int num_pages = flash_size_in_kb / max_sector_size_in_kb
-		+ (stm32x_info->has_large_mem ? 8 : 4);
+	int num_pages = calculate_number_of_sectors(
+			bank, flash_size_in_kb, max_sector_size_in_kb);
 
 	bank->base = base_address;
 	bank->num_sectors = num_pages;
-	bank->sectors = malloc(sizeof(struct flash_sector) * num_pages);
+	bank->sectors = calloc(num_pages, sizeof(struct flash_sector));
 	for (i = 0; i < num_pages; i++) {
 		bank->sectors[i].is_erased = -1;
 		bank->sectors[i].is_protected = 0;
@@ -1522,8 +1562,6 @@ static int stm32x_mass_erase(struct flash_bank *bank)
 
 COMMAND_HANDLER(stm32x_handle_mass_erase_command)
 {
-	int i;
-
 	if (CMD_ARGC < 1) {
 		command_print(CMD, "stm32x mass_erase <bank>");
 		return ERROR_COMMAND_SYNTAX_ERROR;
@@ -1537,7 +1575,7 @@ COMMAND_HANDLER(stm32x_handle_mass_erase_command)
 	retval = stm32x_mass_erase(bank);
 	if (retval == ERROR_OK) {
 		/* set all sectors as erased */
-		for (i = 0; i < bank->num_sectors; i++)
+		for (unsigned int i = 0; i < bank->num_sectors; i++)
 			bank->sectors[i].is_erased = 1;
 
 		command_print(CMD, "stm32x mass erase complete");

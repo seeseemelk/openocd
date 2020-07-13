@@ -181,6 +181,23 @@ static const struct samd_part samd21_parts[] = {
 	{ 0x26, "SAMD21E16B", 64, 8 },
 	{ 0x27, "SAMD21E15B", 32, 4 },
 
+	/* SAMD21 D and L Variants (from Errata)
+	   http://ww1.microchip.com/downloads/en/DeviceDoc/
+	   SAM-D21-Family-Silicon-Errata-and-DataSheet-Clarification-DS80000760D.pdf */
+	{ 0x55, "SAMD21E16BU", 64, 8 },
+	{ 0x56, "SAMD21E15BU", 32, 4 },
+	{ 0x57, "SAMD21G16L", 64, 8 },
+	{ 0x3E, "SAMD21E16L", 64, 8 },
+	{ 0x3F, "SAMD21E15L", 32, 4 },
+	{ 0x62, "SAMD21E16CU", 64, 8 },
+	{ 0x63, "SAMD21E15CU", 32, 4 },
+	{ 0x92, "SAMD21J17D", 128, 16 },
+	{ 0x93, "SAMD21G17D", 128, 16 },
+	{ 0x94, "SAMD21E17D", 128, 16 },
+	{ 0x95, "SAMD21E17DU", 128, 16 },
+	{ 0x96, "SAMD21G17L", 128, 16 },
+	{ 0x97, "SAMD21E17L", 128, 16 },
+
 	/* Known SAMDA1 parts.
 	   SAMD-A1 series uses the same series identifier like the SAMD21
 	   taken from http://ww1.microchip.com/downloads/en/DeviceDoc/40001895A.pdf (pages 14-17) */
@@ -381,7 +398,7 @@ static const struct samd_part *samd_find_part(uint32_t id)
 
 static int samd_protect_check(struct flash_bank *bank)
 {
-	int res, prot_block;
+	int res;
 	uint16_t lock;
 
 	res = target_read_u16(bank->target,
@@ -390,7 +407,7 @@ static int samd_protect_check(struct flash_bank *bank)
 		return res;
 
 	/* Lock bits are active-low */
-	for (prot_block = 0; prot_block < bank->num_prot_blocks; prot_block++)
+	for (unsigned int prot_block = 0; prot_block < bank->num_prot_blocks; prot_block++)
 		bank->prot_blocks[prot_block].is_protected = !(lock & (1u<<prot_block));
 
 	return ERROR_OK;
@@ -708,10 +725,10 @@ static int samd_modify_user_row(struct target *target, uint64_t value,
 	return samd_modify_user_row_masked(target, value << startb, mask);
 }
 
-static int samd_protect(struct flash_bank *bank, int set, int first_prot_bl, int last_prot_bl)
+static int samd_protect(struct flash_bank *bank, int set,
+		unsigned int first, unsigned int last)
 {
 	int res = ERROR_OK;
-	int prot_block;
 
 	/* We can issue lock/unlock region commands with the target running but
 	 * the settings won't persist unless we're able to modify the LOCK regions
@@ -721,7 +738,7 @@ static int samd_protect(struct flash_bank *bank, int set, int first_prot_bl, int
 		return ERROR_TARGET_NOT_HALTED;
 	}
 
-	for (prot_block = first_prot_bl; prot_block <= last_prot_bl; prot_block++) {
+	for (unsigned int prot_block = first; prot_block <= last; prot_block++) {
 		if (set != bank->prot_blocks[prot_block].is_protected) {
 			/* Load an address that is within this protection block (we use offset 0) */
 			res = target_write_u32(bank->target,
@@ -746,7 +763,7 @@ static int samd_protect(struct flash_bank *bank, int set, int first_prot_bl, int
 
 	res = samd_modify_user_row(bank->target,
 			set ? (uint64_t)0 : (uint64_t)UINT64_MAX,
-			48 + first_prot_bl, 48 + last_prot_bl);
+			48 + first, 48 + last);
 	if (res != ERROR_OK)
 		LOG_WARNING("SAMD: protect settings were not made persistent!");
 
@@ -758,9 +775,10 @@ exit:
 	return res;
 }
 
-static int samd_erase(struct flash_bank *bank, int first_sect, int last_sect)
+static int samd_erase(struct flash_bank *bank, unsigned int first,
+		unsigned int last)
 {
-	int res, s;
+	int res;
 	struct samd_info *chip = (struct samd_info *)bank->driver_priv;
 
 	if (bank->target->state != TARGET_HALTED) {
@@ -775,7 +793,7 @@ static int samd_erase(struct flash_bank *bank, int first_sect, int last_sect)
 	}
 
 	/* For each sector to be erased */
-	for (s = first_sect; s <= last_sect; s++) {
+	for (unsigned int s = first; s <= last; s++) {
 		res = samd_erase_row(bank->target, bank->sectors[s].offset);
 		if (res != ERROR_OK) {
 			LOG_ERROR("SAMD: failed to erase sector %d at 0x%08" PRIx32, s, bank->sectors[s].offset);
