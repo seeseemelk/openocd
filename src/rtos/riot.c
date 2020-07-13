@@ -418,7 +418,11 @@ static int riot_update_threads(struct rtos *rtos)
 		irq_thread->threadid = IRQ_THREAD_ID;
 
 		char *name_buf = malloc(64);
-		snprintf(name_buf, 64, "IRQ running on '%s'", rtos->thread_details[rtos->current_threadid].thread_name_str);
+		if (rtos->current_threadid != -1) {
+			snprintf(name_buf, 64, "IRQ running on '%s'", rtos->thread_details[rtos->current_threadid].thread_name_str);
+		} else {
+			snprintf(name_buf, 64, "IRQ running on unknown thread");
+		}
 		name_buf[63] = 0;
 		irq_thread->thread_name_str = name_buf;
 
