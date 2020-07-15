@@ -226,34 +226,24 @@ static const char *describe_thread_status(thread_state_t status)
 		return "sleeping";
 	case STATUS_MUTEX_BLOCKED:
 		return "blocked on mutex";
-		break;
 	case STATUS_RECEIVE_BLOCKED:
 		return "waiting for message";
-		break;
 	case STATUS_SEND_BLOCKED:
 		return "sending message";
-		break;
 	case STATUS_REPLY_BLOCKED:
 		return "replying to message";
-		break;
 	case STATUS_FLAG_BLOCKED_ANY:
 		return "waiting for any flag from flag_mask";
-		break;
 	case STATUS_FLAG_BLOCKED_ALL:
 		return "waiting for all flags in flag_mask";
-		break;
 	case STATUS_MBOX_BLOCKED:
 		return "blocked on get/put on mbox";
-		break;
 	case STATUS_COND_BLOCKED:
 		return "blocked on condition variable";
-		break;
 	case STATUS_RUNNING:
 		return "running";
-		break;
 	case STATUS_PENDING:
 		return "pending";
-		break;
 	default:
 		return "INVALID STATUS";
 	}
@@ -333,6 +323,10 @@ static int riot_update_threads(struct rtos *rtos)
 	if (ret != ERROR_OK) {
 		LOG_ERROR("Failed to get thread count");
 		return ERROR_FAIL;
+	}
+	if (thread_count > 99) {
+		LOG_ERROR("Target has an abnormal number of threads");
+		thread_count = 0;
 	}
 
 	// Check if we are in an interrupt
