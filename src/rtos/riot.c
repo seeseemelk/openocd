@@ -27,6 +27,7 @@
 #include "binarybuffer.h"
 
 #define IRQ_THREAD_ID 100
+#define NO_THREAD_ID 101
 
 static const char * const riot_symbol_list[] = {
 	"sched_num_threads",
@@ -45,6 +46,7 @@ enum riot_symbol_values {
 // see RIOT/core/include/thread.h
 typedef enum {
     STATUS_STOPPED,                 /**< has terminated                       */
+    STATUS_ZOMBIE,                  /**< has terminated & keeps thread's thread_t */
     STATUS_SLEEPING,                /**< sleeping                             */
     STATUS_MUTEX_BLOCKED,           /**< waiting for a locked mutex           */
     STATUS_RECEIVE_BLOCKED,         /**< waiting for a message                */
@@ -222,6 +224,8 @@ static const char *describe_thread_status(thread_state_t status)
 	{
 	case STATUS_STOPPED:
 		return "stopped";
+	case STATUS_ZOMBIE:
+		return "zombie";
 	case STATUS_SLEEPING:
 		return "sleeping";
 	case STATUS_MUTEX_BLOCKED:
@@ -347,7 +351,16 @@ static int riot_update_threads(struct rtos *rtos)
 	rtos_free_threadlist(rtos);
 	if (thread_count == 0) {
 		LOG_ERROR("RIOT has a thread count of zero, threads might not yet be initialized");
-		return ERROR_FAIL;
+		char* name = malloc(20);
+		strcpy(name, "<unknown>");
+
+		rtos->thread_count = 1;
+		rtos->thread_details = malloc(sizeof(struct thread_detail));
+		rtos->thread_details->exists = true;
+		rtos->thread_details->threadid = NO_THREAD_ID;
+		rtos->thread_details->thread_name_str = name;
+		rtos->thread_details->extra_info_str = NULL;
+		return 0;
 	}
 	rtos->thread_count = thread_count + (params->inside_irq?1:0);
 	rtos->thread_details = malloc(sizeof(struct thread_detail) * rtos->thread_count);
@@ -378,25 +391,25 @@ static int riot_update_threads(struct rtos *rtos)
 		thread->exists = true;
 		thread->threadid = thread_info->pid;
 
+		char *name_buf = malloc(64);
 		if (thread_info->name != 0) {
-			char *name_buf = malloc(64);
 			ret = target_read_buffer(rtos->target,
 					(target_addr_t) thread_info->name,
 					64,
 					(unsigned char *)name_buf);
 			if (ret != ERROR_OK) {
+				strcpy(name_buf, "<unknown>");
 				LOG_ERROR("Failed to read thread name");
-				strcpy(name_buf, "Unnamed Thread");
 			}
 			name_buf[63] = 0;
-			thread->thread_name_str = name_buf;
 		} else {
-			thread->thread_name_str = NULL;
+			strcpy(name_buf, "<unknown>");
 		}
+		thread->thread_name_str = name_buf;
 
 		thread->extra_info_str = alloc_info_str(thread_info);
 
-		if (thread_info->status == STATUS_RUNNING) {
+		if (thread_info->status == STATUS_RUNNING || rtos->current_thread == 0) {
 			rtos->current_thread = thread->threadid;
 			rtos->current_threadid = i;
 		}
@@ -453,7 +466,7 @@ static int riot_get_thread_reg_list(struct rtos *rtos,
 		return -3;
 	}
 
-	if (threadid == IRQ_THREAD_ID) {
+	if (threadid == IRQ_THREAD_ID || threadid == NO_THREAD_ID) {
 		// Fake IRQ thread.
 		return rtos_generic_stack_read(
 				rtos->target,
