@@ -23,7 +23,7 @@
 #include "stdio.h"
 #include "rtos.h"
 #include "log.h"
-#include "rtos_standard_stackings.h"
+#include "rtos_riot_stackings.h"
 #include "binarybuffer.h"
 
 #define IRQ_THREAD_ID 100
@@ -176,13 +176,15 @@ static bool riot_detect_rtos(struct target *target)
 
 	for (sym = RIOT_VAL_sched_num_threads;
 		 sym < RIOT_VAL_COUNT; sym++) {
-		if (target->rtos->symbols[sym].address) {
-			LOG_DEBUG("RIOT: Symbol \"%s\" found",
-					riot_symbol_list[sym]);
-		} else {
-			LOG_ERROR("RIOT: Symbol \"%s\" missing",
-					riot_symbol_list[sym]);
-			return false;
+		if (strcmp(target->rtos->symbols[sym].symbol_name, "built_with_develhelp") != 0) {
+			if (target->rtos->symbols[sym].address) {
+				LOG_DEBUG("RIOT: Symbol \"%s\" found",
+						riot_symbol_list[sym]);
+			} else {
+				LOG_ERROR("RIOT: Symbol \"%s\" missing",
+						riot_symbol_list[sym]);
+				return false;
+			}
 		}
 	}
 
@@ -192,11 +194,12 @@ static bool riot_detect_rtos(struct target *target)
 static int riot_create(struct target *target)
 {
 	struct riot_params *params = calloc(1, sizeof(struct riot_params));
-	params->stacking = &rtos_standard_Cortex_M4F_stacking;
+	params->stacking = &rtos_riot_cortex_m34_stacking;
 
 	target->rtos->rtos_specific_params = params;
 
 	target->rtos->current_thread = 0;
+	target->rtos->current_threadid = 1;
 	target->rtos->thread_details = NULL;
 	target->rtos->thread_count = 0;
 
@@ -352,14 +355,18 @@ static int riot_update_threads(struct rtos *rtos)
 	if (thread_count == 0) {
 		LOG_ERROR("RIOT has a thread count of zero, threads might not yet be initialized");
 		char* name = malloc(20);
-		strcpy(name, "<unknown>");
+		strcpy(name, "unknown");
+		char* infostr = malloc(1);
+		strcpy(infostr, "");
 
 		rtos->thread_count = 1;
 		rtos->thread_details = malloc(sizeof(struct thread_detail));
 		rtos->thread_details->exists = true;
 		rtos->thread_details->threadid = NO_THREAD_ID;
 		rtos->thread_details->thread_name_str = name;
-		rtos->thread_details->extra_info_str = NULL;
+		rtos->thread_details->extra_info_str = infostr;
+		rtos->current_thread = 0;
+		rtos->current_threadid = NO_THREAD_ID;
 		return 0;
 	}
 	rtos->thread_count = thread_count + (params->inside_irq?1:0);
@@ -398,12 +405,12 @@ static int riot_update_threads(struct rtos *rtos)
 					64,
 					(unsigned char *)name_buf);
 			if (ret != ERROR_OK) {
-				strcpy(name_buf, "<unknown>");
+				strcpy(name_buf, "unknown");
 				LOG_ERROR("Failed to read thread name");
 			}
 			name_buf[63] = 0;
 		} else {
-			strcpy(name_buf, "<unknown>");
+			strcpy(name_buf, "unknown");
 		}
 		thread->thread_name_str = name_buf;
 
