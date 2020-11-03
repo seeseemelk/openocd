@@ -536,3 +536,13 @@ struct rtos_type riot_rtos = {
 	.get_thread_reg_list = riot_get_thread_reg_list,
 	.get_symbol_list_to_lookup = riot_get_symbol_list_to_lookup
 };
+
+struct rtos_type riot2_rtos = {
+	.name = "RIOT",
+	.detect_rtos = riot_detect_rtos,
+	.create = riot_create,
+	.clean = riot_clean,
+	.update_threads = riot_update_threads,
+	.get_thread_reg_list = riot_get_thread_reg_list,
+	.get_symbol_list_to_lookup = riot_get_symbol_list_to_lookup
+};
