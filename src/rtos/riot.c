@@ -25,6 +25,9 @@
 #include "log.h"
 #include "rtos_riot_stackings.h"
 #include "binarybuffer.h"
+#include "types.h"
+
+#include <stdbool.h>
 
 #define IRQ_THREAD_ID 100
 #define NO_THREAD_ID 101
@@ -33,6 +36,7 @@ static const char * const riot_symbol_list[] = {
 	"sched_num_threads",
 	"sched_threads",
 	"built_with_develhelp",
+	"max_threads",
 	NULL
 };
 
@@ -40,6 +44,7 @@ enum riot_symbol_values {
 	RIOT_VAL_sched_num_threads = 0,
 	RIOT_VAL_sched_threads,
 	RIOT_VAL_develhelp,
+	RIOT_VAL_max_threads,
 	RIOT_VAL_COUNT
 };
 
@@ -159,6 +164,7 @@ struct _thread_without_develhelp {
 struct riot_params {
 	const struct rtos_register_stacking *stacking;
 	uint32_t thread_count;
+	uint32_t max_threads;
 	uint32_t *thread_ptrs;
 	struct thread_info *thread_infos;
 	bool inside_irq;
@@ -193,7 +199,8 @@ static bool riot_detect_rtos(struct target *target)
 
 static int riot_create(struct target *target)
 {
-	struct riot_params *params = calloc(1, sizeof(struct riot_params));
+	struct riot_params *params = malloc(sizeof(struct riot_params));
+	memset(params, 0, sizeof(struct riot_params));
 	params->stacking = &rtos_riot_cortex_m34_stacking;
 
 	target->rtos->rtos_specific_params = params;
@@ -309,7 +316,8 @@ static int read_thread_info(struct riot_params *params, struct rtos *rtos, struc
 static int riot_update_threads(struct rtos *rtos)
 {
 	struct riot_params *params = rtos->rtos_specific_params;
-	int32_t thread_count;
+	uint32_t thread_count;
+	uint8_t max_threads;
 	int ret;
 
 	if (rtos->symbols == NULL) {
@@ -324,9 +332,19 @@ static int riot_update_threads(struct rtos *rtos)
 		params->develhelp = true;
 	}
 
+	ret = target_read_u8(rtos->target,
+			rtos->symbols[RIOT_VAL_max_threads].address, &max_threads);
+	if (ret != ERROR_OK) {
+		LOG_ERROR("Failed to get maximum number of threads");
+		return ERROR_FAIL;
+	}
+	if (max_threads > 99) {
+		LOG_ERROR("Target has an abnormal maximum number of threads");
+		max_threads = 32;
+	}
+
 	ret = target_read_u32(rtos->target,
-			rtos->symbols[RIOT_VAL_sched_num_threads].address,
-			(uint32_t *)&thread_count);
+			rtos->symbols[RIOT_VAL_sched_num_threads].address, &thread_count);
 	if (ret != ERROR_OK) {
 		LOG_ERROR("Failed to get thread count");
 		return ERROR_FAIL;
@@ -352,7 +370,7 @@ static int riot_update_threads(struct rtos *rtos)
 
 	// Do some housekeeping
 	rtos_free_threadlist(rtos);
-	if (thread_count == 0) {
+	if (thread_count == 0 || max_threads == 0) {
 		LOG_ERROR("RIOT has a thread count of zero, threads might not yet be initialized");
 		char* name = malloc(20);
 		strcpy(name, "unknown");
@@ -371,26 +389,37 @@ static int riot_update_threads(struct rtos *rtos)
 	}
 	rtos->thread_count = thread_count + (params->inside_irq?1:0);
 	rtos->thread_details = malloc(sizeof(struct thread_detail) * rtos->thread_count);
+	memset(rtos->thread_details, 0, sizeof(struct thread_detail) * rtos->thread_count);
 
 	// Read the list of thread pointers
-	params->thread_ptrs = realloc(params->thread_ptrs, sizeof(uint32_t) * thread_count);
+	params->thread_ptrs = realloc(params->thread_ptrs, sizeof(uint32_t) * max_threads);
 
 	params->thread_infos = realloc(params->thread_infos, sizeof(struct thread_info) * thread_count);
 
 	ret = target_read_buffer(rtos->target,
 			rtos->symbols[RIOT_VAL_sched_threads].address + 4,
-			4 * thread_count,
+			sizeof(uint32_t) * max_threads,
 			(uint8_t *)params->thread_ptrs);
 	if (ret != ERROR_OK) {
 		LOG_ERROR("Failed to read thread details");
 		return ret;
 	}
 
-	for (int i = 0; i < thread_count; i++) {
+	uint32_t thread_id = -1;
+	for (unsigned int i = 0; i < thread_count; i++) {
+		do {
+			thread_id++;
+			if (thread_id >= max_threads) {
+				LOG_ERROR("Thread structure is corrupt");
+				thread_count = i;
+				goto stopReadingThreads;
+			}
+		}
+		while (params->thread_ptrs[thread_id] == 0);
 		struct thread_detail *thread = rtos->thread_details + i;
 		struct thread_info *thread_info = params->thread_infos + i;
 
-		ret = read_thread_info(params, rtos, thread_info, i);
+		ret = read_thread_info(params, rtos, thread_info, thread_id);
 		if (ret != ERROR_OK) {
 			continue;
 		}
@@ -418,9 +447,10 @@ static int riot_update_threads(struct rtos *rtos)
 
 		if (thread_info->status == STATUS_RUNNING || rtos->current_thread == 0) {
 			rtos->current_thread = thread->threadid;
-			rtos->current_threadid = i;
+			rtos->current_threadid = thread_id;
 		}
 	}
+	stopReadingThreads:
 
 	if (params->inside_irq) {
 		struct thread_detail *irq_thread = rtos->thread_details + rtos->thread_count - 1;
