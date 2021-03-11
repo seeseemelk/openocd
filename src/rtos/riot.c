@@ -37,6 +37,7 @@ static const char * const riot_symbol_list[] = {
 	"sched_threads",
 	"built_with_develhelp",
 	"max_threads",
+	"_tcb_name_offset",
 	NULL
 };
 
@@ -45,6 +46,7 @@ enum riot_symbol_values {
 	RIOT_VAL_sched_threads,
 	RIOT_VAL_develhelp,
 	RIOT_VAL_max_threads,
+	RIOT_VAL_tcb_name_offset,
 	RIOT_VAL_COUNT
 };
 
@@ -173,6 +175,12 @@ struct riot_params {
 	uint32_t register_psp;
 };
 
+static bool is_develhelp_symbol(const char* symbol)
+{
+	return (strcmp("_tcb_name_offset", symbol) != 0)
+		|| (strcmp("built_with_develhelp", symbol) != 0);
+}
+
 static bool riot_detect_rtos(struct target *target)
 {
 	enum riot_symbol_values sym;
@@ -182,7 +190,7 @@ static bool riot_detect_rtos(struct target *target)
 
 	for (sym = RIOT_VAL_sched_num_threads;
 		 sym < RIOT_VAL_COUNT; sym++) {
-		if (strcmp(target->rtos->symbols[sym].symbol_name, "built_with_develhelp") != 0) {
+		if (!is_develhelp_symbol(target->rtos->symbols[sym].symbol_name)) {
 			if (target->rtos->symbols[sym].address) {
 				LOG_DEBUG("RIOT: Symbol \"%s\" found",
 						riot_symbol_list[sym]);
@@ -326,7 +334,8 @@ static int riot_update_threads(struct rtos *rtos)
 	}
 
 	// Check if we still need to perform the develhelp check.
-	if (rtos->symbols[RIOT_VAL_develhelp].address == 0) {
+	if (rtos->symbols[RIOT_VAL_develhelp].address == 0
+			&& rtos->symbols[RIOT_VAL_tcb_name_offset].address == 0) {
 		params->develhelp = false;
 	} else {
 		params->develhelp = true;
@@ -551,8 +560,12 @@ static int riot_get_symbol_list_to_lookup(symbol_table_elem_t *symbol_list[])
 		return ERROR_FAIL;
 	}
 
-	for (s = 0; s < ARRAY_SIZE(riot_symbol_list); s++)
-		(*symbol_list)[s].symbol_name = riot_symbol_list[s];
+	for (s = 0; s < ARRAY_SIZE(riot_symbol_list) - 1; s++)
+	{
+		symbol_table_elem_t* symbol = *symbol_list + s;
+		symbol->symbol_name = riot_symbol_list[s];
+		symbol->optional = is_develhelp_symbol(symbol->symbol_name);
+	}
 
 	return ERROR_OK;
 }
